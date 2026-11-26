@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unit Circle Protocol: Math Checks</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 16px auto; padding: 0 16px; background: #fbf6ec; color: #3b2f25; line-height: 1.45; }
+  h1 { font-size: 1.3rem; }
+  .pass { color: #3d4f1e; } .fail { color: #7a2418; font-weight: 700; }
+  #summary { font-weight: 700; font-size: 1.1rem; }
+  iframe { width: 100%; height: 360px; border: 1px solid #8a6d4b; background: #fff; }
+  li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<h1>Unit Circle Protocol: Math Checks</h1>
+<p>This page checks every exact value, radian conversion, answer key and diagram label in the six missions against values computed here with JavaScript's own sine and cosine. An exact value such as √3/2 is read as a number and compared to 1e-9. Open it from the live site or a local web server, not as a file, so it can read the tool.</p>
+<div id="summary" role="status">Running...</div>
+<ol id="results"></ol>
+<iframe id="tool" src="index.html" title="The tool being checked"></iframe>
+<script>
+(function () {
+  'use strict';
+  var results = [], fails = 0;
+  function check(name, ok, detail) { results.push([name, !!ok, detail || '']); if (!ok) fails++; }
+
+  // ---- Reading exact values: "-√3/2", "1/√2", "3√2/2", "2√3", "0.5", "undefined" ----
+  // Returns a number, NaN for "undefined", Infinity for "∞", or null if the text is not a value.
+  function val(text) {
+    var s = String(text).replace(/\s+/g, '').replace(/[−–]/g, '-').toLowerCase();
+    if (/^(undef|undefined|dne|doesnotexist)$/.test(s)) return NaN;
+    if (s === '∞') return Infinity;
+    var parts = s.split('/');
+    if (parts.length > 2) return null;
+    function term(t) {
+      var sign = 1;
+      if (t.charAt(0) === '-') { sign = -1; t = t.slice(1); }
+      var m = t.match(/^(\d*\.?\d*)(?:√\(?(\d+)\)?)?$/);
+      if (!t || !m || (!m[1] && !m[2])) return null;
+      return sign * (m[1] ? parseFloat(m[1]) : 1) * (m[2] ? Math.sqrt(+m[2]) : 1);
+    }
+    var a = term(parts[0]);
+    if (a === null || parts.length === 1) return a;
+    var b = term(parts[1]);
+    return b === null || b === 0 ? null : a / b;
+  }
+  function same(x, y) {
+    if (x === null || y === null) return false;
+    if (Number.isNaN(x) || Number.isNaN(y)) return Number.isNaN(x) && Number.isNaN(y);
+    if (!isFinite(x) || !isFinite(y)) return x === y;
+    return Math.abs(x - y) < 1e-9;
+  }
+  // "30°", "5π/4", "π", "2π" -> radians
+  function rad(a) {
+    a = String(a).trim();
+    if (a === '0') return 0;
+    if (/°$/.test(a)) return parseFloat(a) * Math.PI / 180;
+    var m = a.match(/^(\d*)π(?:\/(\d+))?$/);
+    return m ? (m[1] ? +m[1] : 1) * Math.PI / (m[2] ? +m[2] : 1) : null;
+  }
+  function trig(fn, r) {
+    var s = Math.sin(r), c = Math.cos(r);
+    if (Math.abs(s) < 1e-12) s = 0;
+    if (Math.abs(c) < 1e-12) c = 0;
+    return fn === 'sin' ? s : fn === 'cos' ? c : (c === 0 ? NaN : s / c);
+  }
+  function question(q) { var m = q.match(/^(sin|cos|tan)\((.+)\)$/); return { fn: m[1], r: rad(m[2]) }; }
+  function shown(x) { return Number.isNaN(x) ? 'undefined' : x.toFixed(6); }
+
+  function waitFor(fn, done) {
+    var tries = 0;
+    (function poll() {
+      try { if (fn()) return done(); } catch (e) {}
+      if (++tries > 100) return done();
+      setTimeout(poll, 50);
+    })();
+  }
+
+  function run(win) {
+    var doc = win.document;
+    var wm = doc.getElementById('wm-iframe').contentWindow, nm = doc.getElementById('nm-iframe').contentWindow;
+    var fb = doc.getElementById('fb-iframe').contentWindow, tm = doc.getElementById('tm-iframe').contentWindow;
+
+    // 1. Trig Whack-a-Mole: every answer, every wrong choice, and the extra wrong values it pads with.
+    var Q = wm.eval('QUESTIONS');
+    var src = doc.getElementById('wm-iframe').getAttribute('srcdoc');
+    var pool = wm.eval('(' + src.match(/const allWrong = (\[[^\]]*\])/)[1] + ')');
+    ['easy', 'medium', 'hard'].forEach(function (level) {
+      Q[level].forEach(function (q) {
+        var t = question(q.q), truth = trig(t.fn, t.r);
+        check('Whack-a-Mole ' + level + ': ' + q.q + ' = ' + q.a, same(val(q.a), truth), 'true value ' + shown(truth));
+        var badWrong = q.wrong.filter(function (w) { return same(val(w), truth) || val(w) === null; });
+        check('Whack-a-Mole ' + level + ': no wrong choice for ' + q.q + ' is also right', badWrong.length === 0, badWrong.join(', '));
+        var badPad = pool.filter(function (w) { return w !== q.a && same(val(w), truth); });
+        check('Whack-a-Mole ' + level + ': no padding value for ' + q.q + ' is also right', badPad.length === 0, badPad.join(', '));
+      });
+    });
+
+    // 2. Trig Practice: answer keys, every accepted form, every equivalent form accepted, and the reference table.
+    var forms = [];
+    fb.TIERS.forEach(function (tier) { tier.questions.forEach(function (q) { q.accepted.forEach(function (a) { if (forms.indexOf(a) < 0) forms.push(a); }); }); });
+    ['∞', '-∞', '1', '-1', '0', '0.5', '-0.5', '√3/3', '-√3/3', '1/√2', '-1/√2', '√(3)/2', '−1/2', '−√3/2', 'sqrt(3)/2', 'sqrt3/2'].forEach(function (f) { if (forms.indexOf(f) < 0) forms.push(f); });
+    fb.TIERS.forEach(function (tier) {
+      tier.questions.forEach(function (q) {
+        var t = question(q.q), truth = trig(t.fn, t.r);
+        var accepted = q.accepted.map(fb.normalize);
+        check('Practice ' + tier.label + ': ' + q.q + ' = ' + q.a, same(val(q.a), truth), 'true value ' + shown(truth));
+        var wrongOk = q.accepted.filter(function (a) { return !same(val(fb.normalize(a)), truth); });
+        check('Practice ' + tier.label + ': every accepted form of ' + q.q + ' is right', wrongOk.length === 0, wrongOk.join(', '));
+        var missed = forms.filter(function (f) { var v = val(fb.normalize(f)); return same(v, truth) && accepted.indexOf(fb.normalize(f)) < 0; });
+        check('Practice ' + tier.label + ': every right form of ' + q.q + ' is accepted', missed.length === 0, missed.length ? 'rejected: ' + missed.join(', ') : '');
+      });
+    });
+    var cells = Array.prototype.map.call(fb.document.querySelectorAll('#refGrid .ref-cell'), function (c) { return c.textContent; });
+    var angles = cells.slice(1, 6);
+    for (var row = 1; row <= 3; row++) {
+      var fn = cells[row * 6];
+      for (var col = 0; col < 5; col++) {
+        var text = cells[row * 6 + 1 + col], truth = trig(fn, rad(angles[col]));
+        check('Practice reference table: ' + fn + ' ' + angles[col] + ' = ' + text, text === '—' ? Number.isNaN(truth) : same(val(text), truth), 'true value ' + shown(truth));
+      }
+    }
+
+    // 3. Trig Navigation: each mission's answer, wording, hint, choices, diagram labels and measurements.
+    var labels = [], realFill = nm.CanvasRenderingContext2D.prototype.fillText;
+    nm.CanvasRenderingContext2D.prototype.fillText = function (t) { labels.push(String(t)); return realFill.apply(this, arguments); };
+    nm.MISSIONS.forEach(function (m, i) {
+      var r = m.angle * Math.PI / 180, legTrig = m.ask === 'vert' ? 'sin' : 'cos', otherTrig = legTrig === 'sin' ? 'cos' : 'sin';
+      var truth = m.hyp * trig(legTrig, r), otherTruth = m.hyp * trig(otherTrig, r);
+      var ns = m.quadrant.charAt(0) === 'N' ? 'north' : 'south', ew = m.quadrant.charAt(1) === 'E' ? 'east' : 'west';
+      var asked = m.ask === 'vert' ? ns : ew;
+      check('Navigation ' + m.id + ': answer ' + m.answer, same(val(m.answer), truth), m.hyp + ' × ' + legTrig + '(' + m.angle + '°) = ' + truth.toFixed(6));
+      check('Navigation ' + m.id + ': says which axis the angle is from', m.text.indexOf(m.hyp + ' units, ' + m.angle + '° ' + ns + ' of ' + ew) >= 0, m.text.replace(/<[^>]+>/g, ''));
+      check('Navigation ' + m.id + ': asks for the ' + asked + ' distance, the leg the angle is ' + (m.ask === 'vert' ? 'opposite' : 'next to'), new RegExp(asked + ' distance', 'i').test(m.text));
+      check('Navigation ' + m.id + ': hint uses ' + legTrig, m.hint.indexOf(m.hyp + ' × ' + legTrig + '(' + m.angle + '°)') >= 0, m.hint);
+      check('Navigation ' + m.id + ': solution states the answer', m.solution.indexOf(m.answer + ' unit') >= 0 && new RegExp(asked, 'i').test(m.solution), m.solution);
+      var right = m.choices.filter(function (c) { return same(val(c), truth); });
+      check('Navigation ' + m.id + ': exactly one choice is right', right.length === 1 && right[0] === m.answer, m.choices.join(', '));
+      labels = [];
+      nm.loadMission(i);
+      var legLabel = m.hyp + ' ' + otherTrig + ' ' + m.angle + '°';
+      check('Navigation ' + m.id + ': diagram labels the known leg "' + legLabel + '"', labels.indexOf(legLabel) >= 0 && labels.indexOf('?') >= 0, labels.filter(function (l) { return / (sin|cos) /.test(l); }).join(', '));
+      var known = nm.document.getElementById(m.ask === 'vert' ? 'horizVal' : 'vertVal').textContent;
+      check('Navigation ' + m.id + ': known leg measures ' + known, same(val(known), otherTruth), otherTruth.toFixed(6));
+      check('Navigation ' + m.id + ': direction reads "' + nm.document.getElementById('bearingVal').textContent + '"', nm.document.getElementById('bearingVal').textContent === m.angle + '° ' + ns + ' of ' + ew);
+    });
+    nm.CanvasRenderingContext2D.prototype.fillText = realFill;
+    nm.loadMission(0);
+
+    // 4. Triangle Morphing: the 30-60-90 and 45-45-90 side ratios, trig values and radians.
+    var S = tm.eval('SPECIAL');
+    [30, 45, 60].forEach(function (d) {
+      var s = S[d], r = d * Math.PI / 180, hyp = val(s.hyp), opp = val(s.opp), adj = val(s.adj);
+      check('Triangle ' + d + '°: opposite/hypotenuse = sin', same(opp / hyp, Math.sin(r)), s.opp + ' / ' + s.hyp);
+      check('Triangle ' + d + '°: adjacent/hypotenuse = cos', same(adj / hyp, Math.cos(r)), s.adj + ' / ' + s.hyp);
+      check('Triangle ' + d + '°: legs satisfy the Pythagorean theorem', same(opp * opp + adj * adj, hyp * hyp));
+      ['sin', 'cos', 'tan'].forEach(function (f) { check('Triangle ' + d + '°: ' + f + ' = ' + s[f], same(val(s[f]), trig(f, r))); });
+      check('Triangle ' + d + '°: ' + d + '° = ' + s.rad, same(rad(s.rad), r));
+      var ratio = s.tip.match(/ratio\s+([^\n]+)/)[1].split(':').map(function (x) { return val(x.trim()); });
+      var sides = [opp, adj, hyp].sort(function (a, b) { return a - b; });
+      check('Triangle ' + d + '°: tip ratio matches the sides', ratio.every(function (x, k) { return same(x / ratio[0], sides[k] / sides[0]); }), s.tip.match(/ratio\s+([^\n]+)/)[1]);
+      tm.snapTo(d);
+      check('Triangle ' + d + '°: panel shows ' + tm.document.getElementById('sinVal').textContent + ', ' + tm.document.getElementById('cosVal').textContent + ', ' + tm.document.getElementById('tanVal').textContent,
+        ['sin', 'cos', 'tan'].every(function (f) { return same(val(tm.document.getElementById(f + 'Val').textContent), trig(f, r)); }));
+    });
+    tm.snapTo(37);
+    check('Triangle 37° (not special): panel shows decimals that match', ['sin', 'cos', 'tan'].every(function (f) {
+      return Math.abs(parseFloat(tm.document.getElementById(f + 'Val').textContent) - trig(f, 37 * Math.PI / 180)) < 5e-5; }), tm.document.getElementById('sinVal').textContent);
+    tm.snapTo(45);
+
+    // 5. Unit Circle Explorer: drag to each special angle and read the panel.
+    win.state.selectedId = 'unit-circle'; win.doLaunch();
+    var canvas = doc.getElementById('uc-c'), box = canvas.getBoundingClientRect(), kx = box.width / canvas.width, ky = box.height / canvas.height;
+    function pointAt(deg) {
+      var a = deg * Math.PI / 180, x = box.left + (240 + 180 * Math.cos(a)) * kx, y = box.top + (240 - 180 * Math.sin(a)) * ky;
+      canvas.dispatchEvent(new win.MouseEvent('mousedown', { clientX: x, clientY: y, bubbles: true }));
+      canvas.dispatchEvent(new win.MouseEvent('mouseup', { clientX: x, clientY: y, bubbles: true }));
+    }
+    function panel(id) { return doc.getElementById('uc-' + id).textContent; }
+    var NICE = { 0: '0', 30: 'π/6', 45: 'π/4', 60: 'π/3', 90: 'π/2', 120: '2π/3', 135: '3π/4', 150: '5π/6', 180: 'π', 210: '7π/6', 225: '5π/4', 240: '4π/3', 270: '3π/2', 300: '5π/3', 315: '7π/4', 330: '11π/6', 360: '2π' };
+    Object.keys(NICE).map(Number).forEach(function (d) {
+      pointAt(d === 360 ? 355 : d);   // mouse positions round to whole pixels, so 360° is reached from just below it
+      var r = d * Math.PI / 180, sinT = trig('sin', r), cosT = trig('cos', r), tanT = trig('tan', r);
+      var quadrant = d % 90 === 0 ? 'none (on an axis)' : ['I', 'II', 'III', 'IV'][Math.floor(d / 90)];
+      check('Unit circle ' + d + '°: angle and radians (' + panel('degVal') + ', ' + panel('radVal') + ')', panel('degVal') === d + '°' && same(rad(panel('radVal')), r) && panel('radVal') === NICE[d]);
+      check('Unit circle ' + d + '°: sin ' + panel('sinVal') + ', cos ' + panel('cosVal') + ', tan ' + panel('tanVal'),
+        same(val(panel('sinVal')), sinT) && same(val(panel('cosVal')), cosT) && same(val(panel('tanVal')), tanT));
+      check('Unit circle ' + d + '°: point ' + panel('coordVal'), panel('coordVal') === '(' + panel('cosVal') + ', ' + panel('sinVal') + ')');
+      check('Unit circle ' + d + '°: quadrant ' + panel('qNum'), panel('qNum') === quadrant);
+      var word = function (v) { return Number.isNaN(v) ? 'undefined' : v === 0 ? 'zero' : v > 0 ? 'positive' : 'negative'; };
+      check('Unit circle ' + d + '°: signs ' + panel('qSin') + ', ' + panel('qCos') + ', ' + panel('qTan'), panel('qSin') === word(sinT) && panel('qCos') === word(cosT) && panel('qTan') === word(tanT));
+    });
+    win.ucToggleSnap();
+    pointAt(29.6);
+    var deg = parseFloat(panel('degVal')), r296 = deg * Math.PI / 180;
+    check('Unit circle with the lock off (' + panel('degVal') + '): no exact value is claimed', panel('sinVal') !== '1/2' && Math.abs(deg - 29.6) < 0.3);
+    check('Unit circle with the lock off: decimals match the angle shown', Math.abs(parseFloat(panel('sinVal')) - Math.sin(r296)) < 2e-3 && Math.abs(parseFloat(panel('cosVal')) - Math.cos(r296)) < 2e-3, panel('sinVal') + ', ' + panel('cosVal'));
+    pointAt(89.98);
+    check('Unit circle with the lock off near 90° (' + panel('degVal') + '): tan is a large number, not "undefined"', panel('tanVal') !== 'undefined' && Math.abs(parseFloat(panel('tanVal'))) > 100, panel('tanVal'));
+    win.ucToggleSnap();
+    pointAt(0);
+
+    // 6. Radian Visualizer: each preset button's radians, degrees, arc length and radii that fit.
+    [['0', 0], ['π/6', Math.PI / 6], ['π/4', Math.PI / 4], ['π/3', Math.PI / 3], ['π/2', Math.PI / 2], ['π', Math.PI], ['3π/2', 3 * Math.PI / 2], ['2π', 2 * Math.PI]].forEach(function (p) {
+      win.rvSnapTo(p[1]);
+      var g = function (id) { return doc.getElementById('rv-' + id).textContent; };
+      var fits = g('fitsVal').replace('≈', '').trim();
+      check('Radians ' + p[0] + ': shows ' + g('radVal') + ' = ' + g('degVal'), g('radVal') === p[0] && g('degVal') === Math.round(p[1] * 180 / Math.PI) + '°' && Math.abs(p[1] * 180 / Math.PI - Math.round(p[1] * 180 / Math.PI)) < 1e-9);
+      check('Radians ' + p[0] + ': ' + g('fitsVal') + ' radii fit along the arc', Math.abs(parseFloat(fits) - p[1]) <= 0.005 + 1e-9, p[1].toFixed(4));
+      check('Radians ' + p[0] + ': arc length ' + g('arcVal'), g('arcVal') === (p[0] === '0' ? '0' : p[0] + ' · r'));
+    });
+    var formula = doc.querySelector('#section-radian-visualizer .formula-box').textContent;
+    var perRad = formula.match(/1 rad ≈ ([\d.]+)°/);
+    check('Radians: "1 rad ≈ ' + (perRad && perRad[1]) + '°"', perRad && Math.abs(parseFloat(perRad[1]) - 180 / Math.PI) <= 0.0005, (180 / Math.PI).toFixed(6));
+    check('Radians: "2π radians = 360°"', /2π radians = 360°/.test(formula));
+    win.rvSnapTo(Math.PI);
+
+    // 7. The report: what was done, with no grades, accuracy or judging lines. Name is optional.
+    win.goHome();
+    win.state.selectedId = 'radian-visualizer'; win.updateState();
+    check('Name is optional: Launch works with the name box empty', doc.getElementById('fName').value === '' && !doc.getElementById('launchBtn').disabled);
+    win.state.selectedId = null;
+    win.state.doneMissions = {
+      'unit-circle': { completed: true }, 'radian-visualizer': { completed: true },
+      'whack-a-mole': { completed: true, score: 300, level: 1 },
+      'navigation-map': { completed: true, correct: 3, attempts: 5, score: 300 },
+      'fill-in-the-blank': { completed: true, correct: 4, total: 9, accuracy: 44 },
+      'triangle-morphing': { completed: false }
+    };
+    win.updateState(); win.buildReport();
+    var report = doc.getElementById('screen-report').textContent;
+    check('Report: no percent, points or accuracy shown', !/%|pts|accuracy/i.test(report), report.match(/.{0,30}(%|pts|accuracy).{0,30}/i) ? report.match(/.{0,30}(%|pts|accuracy).{0,30}/i)[0] : '');
+    check('Report: counts only missions finished with Done & Return', /5 of 6/.test(report) && /Triangle Morphing/.test(report.split('Still to try')[1] || ''));
+    check('Report: no class or teacher fields', !doc.getElementById('fClass') && !doc.getElementById('fTeacher') && !/Teacher|Class/.test(report));
+    check('Mission log: no scores', !/%|pts/.test(doc.getElementById('progressStrip').textContent), doc.getElementById('progressStrip').textContent.trim().slice(0, 80));
+    var allText = doc.documentElement.outerHTML;
+    check('No judging lines anywhere ("STUDY MORE TRIG!", "KEEP PRACTICING!", "TRIG MASTER!")', !/STUDY MORE TRIG|KEEP PRACTICING|TRIG MASTER/.test(allText));
+    win.state.doneMissions = {}; win.updateState();
+
+    // 8. Accessibility basics: keyboard use, contrast of the grey text, named controls, less motion.
+    function lum(hex) {
+      var h = hex.replace('#', ''), c = [0, 2, 4].map(function (i) { var v = parseInt(h.substr(i, 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+      return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    }
+    function contrast(a, b) { var x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+    function key(el, k) { el.dispatchEvent(new el.ownerDocument.defaultView.KeyboardEvent('keydown', { key: k, bubbles: true })); }
+    [[win, '--bg'], [nm, '--bg'], [fb, '--bg'], [tm, '--bg'], [wm, '--bg']].forEach(function (p, i) {
+      var st = p[0].getComputedStyle(p[0].document.documentElement), muted = st.getPropertyValue('--muted').trim(), bg = st.getPropertyValue(p[1]).trim();
+      check('Contrast: grey text in part ' + (i + 1) + ' (' + muted + ' on ' + bg + ')', contrast(muted, bg) >= 4.5, contrast(muted, bg).toFixed(2) + ':1');
+    });
+    var cards = doc.querySelectorAll('.m-card');
+    check('Keyboard: all 6 mission cards can be reached', cards.length === 6 && Array.prototype.every.call(cards, function (c) { return c.tabIndex === 0 && c.getAttribute('role') === 'button'; }));
+    key(cards[1], 'Enter');
+    check('Keyboard: Enter selects a mission card', cards[1].classList.contains('selected') && cards[1].getAttribute('aria-pressed') === 'true' && !doc.getElementById('launchBtn').disabled);
+    win.goHome();
+    var uc = doc.getElementById('uc-c');
+    win.state.selectedId = 'unit-circle'; win.doLaunch();
+    check('Keyboard: the unit circle is a focusable slider', uc.tabIndex === 0 && uc.getAttribute('role') === 'slider');
+    key(uc, 'Home'); key(uc, 'ArrowRight');
+    check('Keyboard: an arrow key steps to 30°', panel('degVal') === '30°' && panel('sinVal') === '1/2', uc.getAttribute('aria-valuetext'));
+    key(uc, 'ArrowRight');
+    check('Keyboard: the next step is 45°', panel('degVal') === '45°' && panel('sinVal') === '√2/2');
+    key(uc, 'Home'); key(uc, 'ArrowLeft');
+    check('Keyboard: stepping back from 0° goes to 330°', panel('degVal') === '330°' && panel('qNum') === 'IV');
+    check('The unit circle tells a screen reader its values', /sine -1\/2, cosine √3\/2/.test(uc.getAttribute('aria-valuetext')), uc.getAttribute('aria-valuetext'));
+    key(uc, 'Home');
+    var holes = wm.document.querySelectorAll('.mole-container');
+    check('Keyboard: all 6 Whack-a-Mole holes can be reached', holes.length === 6 && Array.prototype.every.call(holes, function (h) { return h.tabIndex === 0 && h.getAttribute('role') === 'button'; }));
+    var unnamed = [];
+    [doc, nm.document, fb.document, tm.document, wm.document].forEach(function (d) {
+      Array.prototype.forEach.call(d.querySelectorAll('button, input'), function (b) { if (b.style.display !== 'none' && !(b.getAttribute('aria-label') || b.textContent.trim() || b.title || (b.id && d.querySelector('label[for="' + b.id + '"]')))) unnamed.push(b.id || b.className); });
+    });
+    check('Every button and box has a name', unnamed.length === 0, unnamed.join(', '));
+    check('Motion stops when the device asks for less, in all 5 parts', (allText.match(/prefers-reduced-motion: ?reduce/g) || []).length >= 5);
+    win.goHome();
+
+    // 9. Privacy: nothing loads from outside the page, and nothing is stored.
+    var html = allText.replace(/http:\/\/www\.w3\.org\/2000\/svg/g, '');
+    ['https://', 'http://', '<link', '@import', 'fetch(', 'XMLHttpRequest', 'localStorage', 'sessionStorage', 'indexedDB', 'document.cookie', 'sendBeacon'].forEach(function (bad) {
+      check('Privacy: no "' + bad + '"', html.indexOf(bad) < 0);
+    });
+
+    show();
+  }
+
+  function show() {
+    var list = document.getElementById('results');
+    results.forEach(function (r) {
+      var li = document.createElement('li'); li.className = r[1] ? 'pass' : 'fail';
+      li.textContent = (r[1] ? '✓ ' : '✗ ') + r[0] + (r[2] ? '  (' + r[2] + ')' : '');
+      list.appendChild(li);
+    });
+    document.getElementById('summary').textContent = (results.length - fails) + ' of ' + results.length + ' passed' + (fails ? '. ' + fails + ' failed.' : '.');
+  }
+
+  var frame = document.getElementById('tool');
+  frame.addEventListener('load', function () {
+    var win = frame.contentWindow;
+    waitFor(function () {
+      var d = win.document;
+      return d.getElementById('wm-iframe').contentWindow.eval('QUESTIONS') && d.getElementById('nm-iframe').contentWindow.MISSIONS &&
+        d.getElementById('fb-iframe').contentWindow.TIERS && d.getElementById('tm-iframe').contentWindow.eval('SPECIAL');
+    }, function () {
+      try { run(win); }
+      catch (e) { check('The checks could run', false, e.message + ' (open this page from a web server, not as a file)'); show(); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
